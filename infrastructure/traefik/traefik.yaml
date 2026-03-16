@@ -1,0 +1,115 @@
+#
+# RBAC
+#
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    toolkit.fluxcd.io/tenant: traefik
+  name: traefik
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    toolkit.fluxcd.io/tenant: traefik
+  name: traefik
+  namespace: traefik
+---
+# traefik needs cluster-wide permissions to watch for IngressRoutes and provides CRDs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    toolkit.fluxcd.io/tenant: traefik
+  name: traefik-reconciler
+  namespace: traefik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: traefik
+#
+# Traefik HelmRelease
+#
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 1h
+  url: https://helm.traefik.io/traefik
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  serviceAccountName: traefik
+  chart:
+    spec:
+      chart: traefik
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+      version: 39.0.5
+  interval: 10m0s
+  driftDetection:
+    mode: enabled
+  values:
+    ingressRoute:
+      dashboard:
+        enabled: true
+    providers:
+      kubernetesGateway:
+        enabled: true
+    gateway:
+      enabled: false # Gateways need to be created manually per namespace for tenant separation
+    service:
+      spec:
+        externalTrafficPolicy: Local # 👈 Preserve client source IP
+        loadBalancerIP: 37.156.43.199
+      annotations:
+        loadbalancer.openstack.org/proxy-protocol: "true" # 👈 Amphora LB Proxy Protocol einschalten
+    logs:
+      access:
+        enabled: true
+    ports:
+      web:
+        proxyProtocol:
+          insecure: true
+        http:
+          redirections:
+            entryPoint:
+              priority: 1
+              to: websecure
+              scheme: https
+              permanent: true
+      websecure:
+        proxyProtocol:
+          insecure: true
+    autoscaling:
+      enabled: true
+      maxReplicas: 3
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 80
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "50Mi"
+      limits:
+        cpu: "300m"
+        memory: "150Mi"
